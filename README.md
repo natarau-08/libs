@@ -24,7 +24,7 @@ int main(){
 	std::string s = v->value;
 	
 	// json::Object node stores references to it's children in the
-	// inherited 'children' member and int the key-value map
+	// inherited 'children' member and, in the key-value map
 	for(int i=0;i<o->size();i++) Node* c = o->children[i];
 	
 	for(const auto& kvp : *o->map){
