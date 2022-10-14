@@ -13,11 +13,13 @@
 */
 namespace json {
 	// Proto
+	class Node;
 	class Number;
 	class String;
 	class Object;
 	class Array;
 	class Boolean;
+	void _hPrt(Node* parent, Node* child);
 
 	#pragma region DataTypes
 	enum Type { boolean, number, string, array, object, null };
@@ -49,7 +51,7 @@ namespace json {
 		/// <summary>
 		/// Returns the JSON string equivalent of this node (Includes all children)
 		/// </summary>
-		virtual std::string toString() = 0;
+		virtual std::string toJsonString() = 0;
 
 		#ifdef JSON_LUA
 		/// <summary>
@@ -64,8 +66,8 @@ namespace json {
 		bool value;
 		Boolean(bool v) : Node(Type::boolean), value(v){}
 
-		std::string toString() { return value ? "true" : "false"; }
-
+		std::string toJsonString() { return value ? "true" : "false"; }
+		
 		#ifdef JSON_LUA
 		void toLuaStack(lua_State* L) {
 			lua_pushboolean(L, value);
@@ -77,7 +79,7 @@ namespace json {
 		public:
 		Null() : Node(Type::null){}
 
-		std::string toString() { return "null"; }
+		std::string toJsonString() { return "null"; }
 
 		#ifdef JSON_LUA
 		void toLuaStack(lua_State* L) {
@@ -93,7 +95,7 @@ namespace json {
 
 		operator auto() const { return value; }
 
-		std::string toString() { return std::to_string(value); }
+		std::string toJsonString() { return std::to_string(value); }
 
 		#ifdef JSON_LUA
 		void toLuaStack(lua_State* L) {
@@ -108,7 +110,7 @@ namespace json {
 		std::string value;
 		String(std::string val) : Node(Type::string), value(val) {}
 
-		std::string toString() { return "\"" + value + "\""; }
+		std::string toJsonString() { return "\"" + value + "\""; }
 
 		#ifdef JSON_LUA
 		void toLuaStack(lua_State* L) {
@@ -138,13 +140,13 @@ namespace json {
 			delete n;
 		}
 
-		std::string toString() {
+		std::string toJsonString() {
 			std::string s = "{";
 			for (const auto& a : *map) {
 				if (s.size() > 1)
 					s += ",";
 				s += "\"" + a.first + "\":";
-				s += a.second->toString();
+				s += a.second->toJsonString();
 			}
 			s += "}";
 			return s;
@@ -179,11 +181,11 @@ namespace json {
 
 		Node* operator [] (int index) const { return children[index]; }
 
-		std::string toString() {
+		std::string toJsonString() {
 			std::string s = "[";
 			for (const auto& n : children) {
 				if (s.size() > 1) s += ",";
-				s += n->toString();
+				s += n->toJsonString();
 			}
 			s += "]";
 			return s;
@@ -213,6 +215,7 @@ namespace json {
 
 	#pragma region Proto
 	std::exception _unexpectedEOF();
+
 	#pragma endregion
 
 	#pragma region _internal
@@ -257,7 +260,6 @@ namespace json {
 		}
 	}
 
-
 	void _hPrt(Node* parent, Node* child) {
 		if (parent == NULL)
 			return;
@@ -295,7 +297,7 @@ namespace json {
 		double v = std::strtod(str.c_str(), &end);
 		
 		if (*end != '\0')
-			throw "Invalid number in json at position " + _i;
+			throw std::exception("Invalid number in json at position " + _i);
 
 		Number* n = new Number(v);
 		_hPrt(parent, n);
@@ -449,4 +451,97 @@ namespace json {
 
 		return n;
 	}
+
+	#ifdef JSON_LUA
+	Node* _readFromLua(lua_State* L, Node* parent, int i);
+
+	Object* _readFromLuaObject(lua_State* L, int i) {
+		Object* o = new Object();
+
+		lua_pushnil(L);
+
+		while (lua_next(L, i) != 0) {
+			Node* n = _readFromLua(L, NULL, -2);
+			Node* v = _readFromLua(L, o, -1);
+
+			std::string key = n->type == Type::string ? ((String*)n)->value : n->toJsonString();
+
+			o->set(key, v);
+			
+			delete n;
+			
+			if(lua_gettop(L) > i + 1)
+				lua_pop(L, 1);
+		}
+
+		lua_pop(L, 1); // Pops table too?
+
+		return o;
+	}
+
+	Node* _readFromLua(lua_State* L, Node* parent, int i) {
+		Node* n = NULL;
+
+		int top = lua_gettop(L);
+		if (i < 0)
+			i += top + 1;
+
+		int type = lua_type(L, i);
+		switch (type) {
+			case LUA_TNUMBER: {
+				double num = lua_tonumber(L, i);
+				n = new Number(num);
+				break;
+			}
+
+			case LUA_TSTRING: {
+				std::string str = std::string(lua_tostring(L, i));
+				n = new String(str);
+				break;
+			}
+
+			case LUA_TBOOLEAN: {
+				bool b = lua_toboolean(L, i) != 0;
+				n = new Boolean(b);
+				break;
+			}
+
+			case LUA_TNIL: {
+				n = new Null();
+				break;
+			}
+
+			case LUA_TTABLE: {
+				n = _readFromLuaObject(L, i);
+				break;
+			}
+
+			default:
+				throw std::string("Invalid lua type ") + lua_typename(L, type);
+				break;
+		}
+
+		_hPrt(parent, n);
+		return n;
+	}
+
+	/*
+		This is for reading tables only.
+		For reading other types don't use this library.
+	*/
+	Node* fromLuaStack(lua_State* L, int i) {
+		Node* n = NULL;
+
+		try {
+			n = _readFromLua(L, NULL, i);
+		}
+		catch (std::string e) {
+			std::cerr << e << std::endl;
+			delete n;
+			n = NULL;
+		}
+
+		return n;
+	}
+	#endif
 }
